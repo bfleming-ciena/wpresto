@@ -5,10 +5,12 @@
 # print client.version()
 # #
 
-import gzip
+# import gzip
 import sys
-from optparse import OptionParser
+import argparse
 import os.path
+
+CONTAINERS = ["wordpress", "mysql", "dbdata", "webdata"]
 
 
 # System call for unzip
@@ -51,6 +53,21 @@ def replaceAll(file,searchExp,replaceExp):
             line = line.replace(searchExp,replaceExp)
         sys.stdout.write(line)
 
+# Destroy the site
+def perform_rm_arg():
+    ans = raw_input('Permanent operation. Are you sure? (y/n) ')
+    if 'y' not in ans:
+        exit("abort.", 1)
+    else:
+        print("Removing related containers...")
+        cmd = "docker rm -f " + " ".join(CONTAINERS)
+        sysCmd(cmd)
+
+# Short-hand
+def exit(msg, code):
+    print(msg if msg else "")
+    sys.exit(code)
+
 DEBUG=0
 def sysCmd(cmd):
     if not DEBUG:
@@ -58,46 +75,56 @@ def sysCmd(cmd):
     else:
         print("DEBUG: %s" % (cmd))
 
+
+blue = bcolors.print_blue
+
+# Create an entire site from the BackWPup .tar.gz file. Nothing else needed!
+def create_from_backup(filename):
+
+        # Create DB Data Volume
+        cmd='docker run -d -v /var/lib/mysql --name dbdata busybox echo "db data container"'
+        blue("    [*] Creating DB data volume.")
+        sysCmd(cmd)
+
+        # Create Web Data Volume
+        blue("    [*] Creating WP web data volume.")
+        cmd='docker run -d -v /var/www/html --name webdata busybox echo "web data container"'
+        sysCmd(cmd)
+
+        # Create Wordpress container and link with the data volume
+        abs_path = os.path.abspath(filename)
+        name_part = os.path.basename(filename)
+        blue("    [*] Creating MYSQL container and importing .sql file from %s" % (name_part))
+        cmd = "docker run --name mysql --volumes-from dbdata -v %s:/tmp/%s -e MYSQL_ROOT_PASSWORD=admin -e MYSQL_DATABASE=wordpressdb -e \
+               MYSQL_BACKWPUP_TGZ=/tmp/%s -d mysqlwpresto" % (abs_path, name_part, name_part)
+        sysCmd(cmd)
+
+        import time
+        blue("    [*] Creating WordPress container and importing %s" % (name_part))
+        time.sleep(30)
+        blue("    [*] Waiting a few seconds for MYSQL to come up...")
+        cmd = "docker run --name wordpress --volumes-from webdata --link mysql:mysql -p 80:80 -d -e WORDPRESS_DB_NAME=wordpressdb \
+              -e WORDPRESS_DB_PASSWORD=admin -v %s:/tmp/%s -e WORDPRESS_BACKWPUP_TGZ=/tmp/%s wordpresto" % (abs_path, name_part, name_part)
+        sysCmd(cmd)
+
+
 if __name__ == '__main__':
 
-    parser = OptionParser()
-    parser.add_option("-f", "--file", dest="filename",
-                      help="backup file", metavar="FILE")
-    parser.add_option("-d", "--destdir", dest="destdir", default=".",
-                      help="destination decompress")
+    parser = argparse.ArgumentParser(description="Create a Wordpress Site on Docker")
+    parser.add_argument('--file', dest="filename", type=str)
+    parser.add_argument('--rm', dest='remove', action='store_true')
+    parser.add_argument('--launch', dest='launch', action='store_true') # assume vols exist?
+    # parser.add_argument('--dest', dest="destdir", type=str)
 
-    (options, args) = parser.parse_args()
+    args = parser.parse_args()
 
-    if not options.filename:
-        print("--file <filename> required")
-        sys.exit(1)
+    # Remove all traces of the site
+    if args.remove:
+        perform_rm_arg()
 
-    # Create DB Data Volume
-    cmd='docker run -d -v /var/lib/mysql --name dbdata busybox echo "db data container"'
-    bcolors.print_blue("    [*] Creating DB data volume.")
-    sysCmd(cmd)
-
-    # Create Web Data Volume
-    bcolors.print_blue("    [*] Creating WP web data volume.")
-    cmd='docker run -d -v /var/www/html --name webdata busybox echo "web data container"'
-    sysCmd(cmd)
-
-    # Create Wordpress container and link with the data volume
-    abs_path = os.path.abspath(options.filename)
-    name_part = os.path.basename(options.filename)
-    bcolors.print_blue("    [*] Creating MYSQL container and importing .sql file from %s" % (name_part))
-    cmd="docker run --name mysql --volumes-from dbdata -v %s:/tmp/%s -e MYSQL_ROOT_PASSWORD=admin -e MYSQL_DATABASE=wordpressdb -e \
-MYSQL_BACKWPUP_TGZ=/tmp/%s -d mysqlwpresto" % (abs_path, name_part, name_part)
-    sysCmd(cmd)
-
-    import time
-    bcolors.print_blue("    [*] Creating WordPress container and importing %s" % (name_part))
-    time.sleep(8)
-    bcolors.print_blue("    [*]Waiting a few seconds for MYSQL to come up...")
-    cmd="docker run --name wordpress --volumes-from webdata --link mysql:mysql -p 8080:80 -d -e WORDPRESS_DB_NAME=wordpressdb \
--e WORDPRESS_DB_PASSWORD=admin -v %s:/tmp/%s -e WORDPRESS_BACKWPUP_TGZ=/tmp/%s wordpresto" % \
-(abs_path, name_part, name_part)
-    sysCmd(cmd)
+    # Create site from backup file option
+    if args.filename:
+        create_from_backup(args.filename)
 
 
 
@@ -112,7 +139,7 @@ MYSQL_BACKWPUP_TGZ=/tmp/%s -d mysqlwpresto" % (abs_path, name_part, name_part)
                       # help="don't print status messages to stdout")
     #(options, args) = parser.parse_args()
     # tmp_file = "test.tar.gz"
-    # shutil.copyfile(options.filename, tmp_file)
+    # shutil.copyfile(args.filename, tmp_file)
     # sys_unzip(tmp_file)
 
     # if os.path.isfile(options.filename):
